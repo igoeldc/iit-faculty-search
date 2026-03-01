@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IIT Faculty Search</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;600;700&family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<!-- Setup screen -->
+<div id="setup-screen">
+  <div class="setup-box">
+    <div class="setup-logo">IIT <span>Faculty</span> Search</div>
+    <div class="setup-subtitle">Illinois Institute of Technology · Faculty Discovery System</div>
+
+    <div class="setup-steps">
+      <div class="setup-step">
+        <div class="step-num">1</div>
+        <div class="step-content">
+          <h4>Install dependencies</h4>
+          <div class="code-block">pip install httpx beautifulsoup4 fastapi uvicorn numpy</div>
+        </div>
+      </div>
+      <div class="setup-step">
+        <div class="step-num">2</div>
+        <div class="step-content">
+          <h4>Run the scraper</h4>
+          <div class="code-block">cd scraper<br>python scraper.py --db ../data/faculty.db</div>
+        </div>
+      </div>
+      <div class="setup-step">
+        <div class="step-num">3</div>
+        <div class="step-content">
+          <h4>Start the API server</h4>
+          <div class="code-block">cd backend<br>uvicorn main:app --reload</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="setup-api-input">
+      <input type="text" id="api-url-input" placeholder="API URL (default: http://localhost:8000)" />
+      <button class="setup-btn" onclick="connectToApi()">Connect</button>
+    </div>
+    <div class="demo-btn" onclick="loadDemoMode()">→ Load with sample data (demo mode)</div>
+  </div>
+</div>
+
+<!-- App -->
+<header>
+  <div class="header-inner">
+    <div class="logo">IIT <span>Faculty</span></div>
+    <div class="logo-divider"></div>
+    <div class="header-subtitle">Faculty Search</div>
+    <div class="header-stats" id="header-stats"></div>
+  </div>
+</header>
+
+<div class="search-strip">
+  <div class="search-strip-inner">
+    <div class="search-box">
+      <input type="text" id="search-input" placeholder="Search by name, research area, or keyword…" autocomplete="off" />
+      <svg class="search-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
+      </svg>
+    </div>
+    <div class="filter-group">
+      <select id="dept-filter">
+        <option value="">All Departments</option>
+      </select>
+      <select id="type-filter">
+        <option value="">All Types</option>
+        <option value="Professor">Full Professor</option>
+        <option value="Associate Professor">Associate Professor</option>
+        <option value="Assistant Professor">Assistant Professor</option>
+        <option value="Teaching">Teaching Faculty</option>
+        <option value="Adjunct">Adjunct Faculty</option>
+        <option value="Emeritus">Emeritus</option>
+        <option value="Research">Research Faculty</option>
+      </select>
+    </div>
+    <div class="mode-tabs">
+      <button class="mode-tab active" data-mode="hybrid">Hybrid</button>
+      <button class="mode-tab" data-mode="semantic">Semantic</button>
+      <button class="mode-tab" data-mode="keyword">Keyword</button>
+    </div>
+  </div>
+</div>
+
+<div class="main">
+  <div class="results-bar" id="results-bar" style="display:none">
+    <div class="results-count" id="results-count"></div>
+    <div class="active-filters" id="active-filters"></div>
+    <button class="clear-all" onclick="clearAll()" id="clear-all-btn" style="display:none">Clear all</button>
+  </div>
+
+  <div class="faculty-grid" id="faculty-grid">
+    <!-- Populated by JS -->
+  </div>
+
+  <div class="pagination" id="pagination"></div>
+</div>
+
+<!-- Modal -->
+<div class="modal-overlay" id="modal-overlay" onclick="closeModalOutside(event)">
+  <div class="modal" id="modal">
+    <div class="modal-hero" id="modal-hero"></div>
+    <div class="modal-body" id="modal-body"></div>
+  </div>
+</div>
+
+<script src="script.js"></script>
+</body>
+</html>
