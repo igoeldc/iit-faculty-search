@@ -1,0 +1,6 @@
+bm25s
+qdrant-client
+sentence-transformers
+fastapi
+uvicorn[standard]
+tantivy
