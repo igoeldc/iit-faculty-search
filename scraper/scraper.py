@@ -106,19 +106,31 @@ def scrape_directory(faculty_only: bool = True, max_pages: int = 100) -> list[st
 # Phase 2: Scrape individual profile pages
 # ---------------------------------------------------------------------------
 
-def parse_list_section(heading_tag) -> list[str]:
+def parse_list_section(heading_tag) -> tuple[list[str], list[str]]:
     """
-    Given a heading tag (h2/h3), collect all <li> text under the next <ul>.
+    Given a heading tag (h2/h3/h4), collect all content under the section in document order: <p> tags (split on <br/>) and <ul>/<li> items.
+
+    Returns (plain_items, html_items) — plain text for indexing, inner HTML for display.
     """
-    items = []
+    plain, html = [], []
     sib = heading_tag.find_next_sibling()
     while sib:
         if sib.name in ("h2", "h3", "h4"):
             break
         if sib.name == "ul":
-            items.extend(clean(li.get_text()) for li in sib.find_all("li"))
+            for li in sib.find_all("li"):
+                t = clean(li.get_text())
+                if t:
+                    plain.append(t)
+                    html.append(li.decode_contents().strip())
+        elif sib.name == "p":
+            for part in sib.decode_contents().split("<br/>"):
+                t = clean(BeautifulSoup(part, "html.parser").get_text())
+                if t:
+                    plain.append(t)
+                    html.append(part.strip())
         sib = sib.find_next_sibling()
-    return items
+    return plain, html
 
 
 def scrape_profile(url: str) -> dict | None:
@@ -176,11 +188,17 @@ def scrape_profile(url: str) -> dict | None:
     # --- Structured sections (Education, Research Interests, etc.) ---
     section_map = {
         "education": [],
+        "education_html": [],
         "research_interests": [],
+        "research_interests_html": [],
         "professional_affiliations": [],
+        "professional_affiliations_html": [],
         "publications": [],
+        "publications_html": [],
         "books": [],
+        "books_html": [],
         "patents": [],
+        "patents_html": [],
     }
 
     SECTION_KEYS = {
@@ -198,17 +216,9 @@ def scrape_profile(url: str) -> dict | None:
         heading_text = clean(heading.get_text()).lower()
         for keyword, key in SECTION_KEYS.items():
             if keyword in heading_text:
-                items = parse_list_section(heading)
-                # Also grab plain paragraphs (some sections use <p> not <ul>)
-                if not items:
-                    sib = heading.find_next_sibling()
-                    while sib and sib.name not in ("h2", "h3", "h4"):
-                        if sib.name == "p":
-                            t = clean(sib.get_text())
-                            if t:
-                                items.append(t)
-                        sib = sib.find_next_sibling()
-                section_map[key].extend(items)
+                plain, html = parse_list_section(heading)
+                section_map[key].extend(plain)
+                section_map[f"{key}_html"].extend(html)
                 break
 
     data.update(section_map)

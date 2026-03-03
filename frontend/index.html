@@ -22,21 +22,21 @@
         <div class="step-num">1</div>
         <div class="step-content">
           <h4>Install dependencies</h4>
-          <div class="code-block">pip install httpx beautifulsoup4 fastapi uvicorn numpy</div>
+          <div class="code-block">pip install bm25s qdrant-client sentence-transformers fastapi uvicorn</div>
         </div>
       </div>
       <div class="setup-step">
         <div class="step-num">2</div>
         <div class="step-content">
-          <h4>Run the scraper</h4>
-          <div class="code-block">cd scraper<br>python scraper.py --db ../data/faculty.db</div>
+          <h4>Build indices</h4>
+          <div class="code-block">python build_indices.py</div>
         </div>
       </div>
       <div class="setup-step">
         <div class="step-num">3</div>
         <div class="step-content">
           <h4>Start the API server</h4>
-          <div class="code-block">cd backend<br>uvicorn main:app --reload</div>
+          <div class="code-block">uv run uvicorn backend.main:app --reload --reload-dir backend --port 8000</div>
         </div>
       </div>
     </div>
@@ -86,6 +86,7 @@
       <button class="mode-tab active" data-mode="hybrid">Hybrid</button>
       <button class="mode-tab" data-mode="semantic">Semantic</button>
       <button class="mode-tab" data-mode="keyword">Keyword</button>
+      <button class="mode-tab" data-mode="structured">Structured</button>
     </div>
   </div>
 </div>

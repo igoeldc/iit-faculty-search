@@ -20,18 +20,16 @@ async function connectToApi() {
   if (input) API_URL = input.replace(/\/$/, '');
 
   try {
-    const r = await fetch(`${API_URL}/api/health`);
+    const r = await fetch(`${API_URL}/departments`);
     if (!r.ok) throw new Error('Bad response');
-    const data = await r.json();
     hideSetup();
     await loadDepartments();
-    await loadStats();
     doSearch();
   } catch(e) {
     alert(`Could not connect to API at ${API_URL}
 
 Make sure the backend is running:
-  uvicorn main:app --reload`);
+  uvicorn backend.main:app --reload --port 8000`);
   }
 }
 
@@ -142,7 +140,7 @@ function injectDemoData() {
 
 // ── API calls ─────────────────────────────────────────────────────────────
 async function loadDepartments() {
-  const r = await fetch(`${API_URL}/api/departments`);
+  const r = await fetch(`${API_URL}/departments`);
   const data = await r.json();
   const sel = document.getElementById('dept-filter');
   data.departments.forEach(d => {
@@ -150,13 +148,8 @@ async function loadDepartments() {
     opt.value = d; opt.textContent = d;
     sel.appendChild(opt);
   });
-}
-
-async function loadStats() {
-  const r = await fetch(`${API_URL}/api/stats`);
-  const data = await r.json();
   document.getElementById('header-stats').textContent =
-    `${data.total_faculty} faculty · ${data.total_departments} departments`;
+    `${data.departments.length} departments`;
 }
 
 async function doSearch() {
@@ -164,17 +157,15 @@ async function doSearch() {
 
   const params = new URLSearchParams({
     limit: state.limit,
-    offset: state.page * state.limit,
     mode: state.mode,
   });
   if (state.query) params.set('q', state.query);
-  if (state.department) params.set('department', state.department);
-  if (state.facultyType) params.set('faculty_type', state.facultyType);
+  if (state.department) params.set('dept', state.department);
 
   showLoading();
 
   try {
-    const r = await fetch(`${API_URL}/api/search?${params}`);
+    const r = await fetch(`${API_URL}/search?${params}`);
     const data = await r.json();
     state.results = data.results;
     state.total = data.total;
@@ -240,27 +231,30 @@ function createCard(f) {
   card.onclick = () => openModal(f);
 
   const titles = (f.titles || []).filter(t => !["Faculty","Media Expert","Staff"].includes(t));
+  const dept = Array.isArray(f.departments) ? f.departments[0] : (f.department || '');
+  const research = Array.isArray(f.research_interests) ? f.research_interests.join(', ') : (f.research_areas || '');
 
   const avatarHtml = f.photo_url
     ? `<div class="avatar"><img src="${f.photo_url}" alt="${f.name}" onerror="this.parentElement.textContent='${getInitials(f.name)}'"></div>`
     : `<div class="avatar">${getInitials(f.name)}</div>`;
 
-  const researchHtml = f.research_areas ? `
+  const researchHtml = research ? `
     <div class="card-research">
       <div class="card-research-label">Research</div>
-      <div class="card-research-text">${f.research_areas}</div>
+      <div class="card-research-text">${research}</div>
     </div>` : '';
 
   const emailHtml = f.email ? `<div class="card-email">${f.email}</div>` : `<div class="card-email" style="color:var(--rule)">no email listed</div>`;
 
-  const scoreHtml = f._score ? `<div class="score-badge">${f._score.toFixed(2)}</div>` : '';
+  const scoreHtml = f.score != null ? `<div class="score-badge">${f.score.toFixed(3)}</div>` : '';
+  const typeBadge = f.search_type ? `<div class="score-badge" style="background:var(--crimson-muted);color:var(--crimson)">${f.search_type}</div>` : '';
 
   card.innerHTML = `
     <div class="card-header">
       ${avatarHtml}
       <div class="card-name-block">
         <div class="card-name">${f.name}</div>
-        <div class="card-dept">${f.department || ''}</div>
+        <div class="card-dept">${dept}</div>
       </div>
     </div>
     ${titles.length ? `<div class="card-titles">${titles.slice(0,2).map(t => `<span class="card-title-badge">${t}</span>`).join('')}</div>` : ''}
@@ -268,7 +262,7 @@ function createCard(f) {
     <div class="card-footer">
       ${emailHtml}
       ${f.profile_url ? `<a class="card-link" href="${f.profile_url}" target="_blank" onclick="e=>e.stopPropagation()">Profile →</a>` : ''}
-      ${scoreHtml}
+      ${typeBadge}${scoreHtml}
     </div>
   `;
   return card;
@@ -352,6 +346,7 @@ function clearAll() { clearQuery(); clearDept(); clearType(); }
 // ── Modal ─────────────────────────────────────────────────────────────────
 function openModal(f) {
   const titles = (f.titles || []).filter(t => !["Faculty","Media Expert","Staff"].includes(t));
+  const dept = Array.isArray(f.departments) ? f.departments.join(', ') : (f.department || '');
   const avatarHtml = f.photo_url
     ? `<div class="modal-avatar"><img src="${f.photo_url}" alt="${f.name}" onerror="this.parentElement.textContent='${getInitials(f.name)}'"></div>`
     : `<div class="modal-avatar">${getInitials(f.name)}</div>`;
@@ -360,7 +355,7 @@ function openModal(f) {
     ${avatarHtml}
     <div style="flex:1;min-width:0">
       <div class="modal-name">${f.name}</div>
-      <div class="modal-dept">${f.department || ''}</div>
+      <div class="modal-dept">${dept}</div>
       ${titles.length ? `<ul class="modal-title-list">${titles.map(t => `<li>${t}</li>`).join('')}</ul>` : ''}
     </div>
     <button class="modal-close" onclick="closeModal()">×</button>
@@ -368,35 +363,38 @@ function openModal(f) {
 
   let bodyHtml = '';
 
-  // Research areas
-  if (f.research_areas) {
+  // Research interests
+  const researchHtml = Array.isArray(f.research_interests_html) ? f.research_interests_html : [];
+  const research = Array.isArray(f.research_interests) ? f.research_interests : (f.research_areas ? [f.research_areas] : []);
+  if (research.length) {
+    const body = researchHtml.length
+      ? researchHtml.map(p => `<p style="margin:0 0 8px">${p}</p>`).join('')
+      : research.map(p => `<p style="margin:0 0 8px">${p}</p>`).join('');
     bodyHtml += `<div class="modal-section">
-      <div class="modal-section-title">Research Areas</div>
-      <div class="modal-section-body">${f.research_areas}</div>
-    </div>`;
-  }
-
-  // Bio
-  if (f.bio) {
-    bodyHtml += `<div class="modal-section">
-      <div class="modal-section-title">Biography</div>
-      <div class="modal-section-body">${f.bio}</div>
+      <div class="modal-section-title">Research Interests</div>
+      <div class="modal-section-body">${body}</div>
     </div>`;
   }
 
   // Publications
-  if (f.publications_snippet) {
+  const pubsHtml = Array.isArray(f.publications_html) ? f.publications_html : [];
+  const pubs = Array.isArray(f.publications) ? f.publications : [];
+  if (pubs.length) {
+    const items = pubsHtml.length ? pubsHtml.slice(0,10) : pubs.slice(0,10);
     bodyHtml += `<div class="modal-section">
       <div class="modal-section-title">Selected Publications</div>
-      <div class="modal-section-body">${f.publications_snippet}</div>
+      <div class="modal-section-body"><ul style="padding-left:16px">${items.map(p => `<li>${p}</li>`).join('')}</ul></div>
     </div>`;
   }
 
   // Education
-  if (f.education) {
+  const eduHtml = Array.isArray(f.education_html) ? f.education_html : [];
+  const edu = Array.isArray(f.education) ? f.education : (f.education ? [f.education] : []);
+  if (edu.length) {
+    const items = eduHtml.length ? eduHtml : edu;
     bodyHtml += `<div class="modal-section">
       <div class="modal-section-title">Education</div>
-      <div class="modal-section-body">${f.education}</div>
+      <div class="modal-section-body"><ul style="padding-left:16px">${items.map(e => `<li>${e}</li>`).join('')}</ul></div>
     </div>`;
   }
 
@@ -414,15 +412,12 @@ function openModal(f) {
   }
 
   // External links
-  const links = f.external_links || {};
-  if (typeof links === 'object' && Object.keys(links).length) {
-    const linkHtml = Object.entries(links).map(([k, v]) => {
-      const label = { google_scholar: '🎓 Google Scholar', github: '💻 GitHub', website: '🌐 Website', homepage: '🌐 Homepage' }[k] || k;
-      return `<a class="ext-link" href="${v}" target="_blank">${label}</a>`;
-    }).join('');
+  const extLinks = [];
+  if (f.google_scholar_url) extLinks.push(`<a class="ext-link" href="${f.google_scholar_url}" target="_blank">Google Scholar</a>`);
+  if (extLinks.length) {
     bodyHtml += `<div class="modal-section">
       <div class="modal-section-title">Links</div>
-      <div class="ext-links">${linkHtml}</div>
+      <div class="ext-links">${extLinks.join('')}</div>
     </div>`;
   }
 
