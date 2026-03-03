@@ -1,0 +1,17 @@
+[project]
+name = "iit-faculty-search"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "bm25s",
+    "tantivy",
+    "qdrant-client",
+    "sentence-transformers",
+    "fastapi",
+    "uvicorn[standard]",
+    "requests",
+    "beautifulsoup4",
+]
+
