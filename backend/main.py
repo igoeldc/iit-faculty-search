@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import pickle
 import sys
+import threading
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query
@@ -49,6 +50,18 @@ _faculty: list[dict] = []
 _tantivy_index = None
 _qdrant_client = None
 _embed_model = None
+_embed_model_lock = threading.Lock()
+
+
+def _get_embed_model():
+    global _embed_model
+    with _embed_model_lock:
+        if _embed_model is None:
+            from sentence_transformers import SentenceTransformer
+
+            _embed_model = SentenceTransformer("all-MiniLM-L6-v2")
+            print("[startup] Sentence-transformer model loaded")
+    return _embed_model
 
 
 # ---------------------------------------------------------------------------
@@ -99,8 +112,6 @@ async def lifespan(app: FastAPI):
     qdrant_key = os.environ.get("QDRANT_API_KEY")
 
     from qdrant_client import QdrantClient
-    from sentence_transformers import SentenceTransformer
-
     if qdrant_url and qdrant_key:
         _qdrant_client = QdrantClient(url=qdrant_url, api_key=qdrant_key)
         print(f"[startup] Qdrant Cloud client connected ({qdrant_url})")
@@ -111,9 +122,6 @@ async def lifespan(app: FastAPI):
             )
         _qdrant_client = QdrantClient(path=qdrant_dir)
         print(f"[startup] Qdrant local client loaded ({qdrant_dir})")
-
-    _embed_model = SentenceTransformer("all-MiniLM-L6-v2")
-    print("[startup] Sentence-transformer model loaded")
 
     yield  # app runs here
 
@@ -231,7 +239,7 @@ def search_semantic(
     limit: int = Query(10, ge=1, le=50),
 ):
     results = _filter_results(
-        semantic_search(q, None, len(_faculty), _qdrant_client, _embed_model),
+        semantic_search(q, None, len(_faculty), _qdrant_client, _get_embed_model()),
         dept,
         faculty_type,
     )
@@ -273,7 +281,7 @@ def search(
     if mode == "keyword":
         results = keyword_search(q, len(_faculty), _bm25_retriever, _faculty)
     elif mode == "semantic":
-        results = semantic_search(q, None, len(_faculty), _qdrant_client, _embed_model)
+        results = semantic_search(q, None, len(_faculty), _qdrant_client, _get_embed_model())
     elif mode == "structured":
         results = structured_search(
             q, None, None, len(_faculty), _tantivy_index, _bm25_retriever, _faculty
@@ -287,7 +295,7 @@ def search(
             _faculty,
             _tantivy_index,
             _qdrant_client,
-            _embed_model,
+            _get_embed_model(),
         )
 
     results = _filter_results(results, dept, faculty_type)
