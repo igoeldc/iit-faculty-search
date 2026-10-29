@@ -78,6 +78,20 @@ python -m http.server 3000 --directory frontend
 
 ---
 
+## Refresh only School of Computing
+
+Scrape fresh profiles using the directory's school filter and build separate indices:
+
+```bash
+uv run python scraper/scraper.py --school "School of Computing" --output faculty-computing.json
+uv run python build_indices.py --input faculty-computing.json --indices-dir indices/computing
+INDICES_DIR=indices/computing bash dev.sh
+```
+
+Stop any running backend first. Existing full data and indices are preserved.
+Completeness depends on IIT's school assignments. The scraper fails without
+replacing its output if the school label cannot be resolved or a page fails.
+
 ## API Reference
 
 ### `GET /search`
@@ -86,12 +100,14 @@ python -m http.server 3000 --directory frontend
 |-----------|------|-------------|
 | `q` | string | Search query |
 | `dept` | string | Filter by department name |
+| `faculty_type` | string | Filter titles, e.g. `Associate Professor` or `Full Professor` |
 | `mode` | string | `hybrid` (default), `keyword`, `semantic`, `structured` |
+| `offset` | int | Number of matching results to skip (default 0) |
 | `limit` | int | Results per page (default 10, max 50) |
 
 **Example:**
 ```
-GET /search?q=machine+learning&dept=Computer+Science&mode=hybrid
+GET /search?q=machine+learning&dept=Computer+Science&faculty_type=Associate+Professor&mode=hybrid
 ```
 
 ### `GET /search/keyword?q=...&limit=10`

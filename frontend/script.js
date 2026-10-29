@@ -158,9 +158,11 @@ async function doSearch() {
   const params = new URLSearchParams({
     limit: state.limit,
     mode: state.mode,
+    offset: state.page * state.limit,
   });
   if (state.query) params.set('q', state.query);
   if (state.department) params.set('dept', state.department);
+  if (state.facultyType) params.set('faculty_type', state.facultyType);
 
   showLoading();
 
@@ -191,7 +193,13 @@ function doSearchDemo() {
     all = all.filter(f => f.department === state.department);
   }
   if (state.facultyType) {
-    all = all.filter(f => (f.titles||[]).some(t => t.toLowerCase().includes(state.facultyType.toLowerCase())));
+    all = all.filter(f => {
+      const titles = (f.titles || []).join(' ').toLowerCase();
+      if (state.facultyType === 'Full Professor') {
+        return titles.includes('professor') && !['assistant professor', 'associate professor', 'teaching professor', 'research professor', 'adjunct'].some(t => titles.includes(t));
+      }
+      return titles.includes(state.facultyType.toLowerCase());
+    });
   }
 
   state.results = all.slice(state.page * state.limit, (state.page + 1) * state.limit);
@@ -297,15 +305,9 @@ function renderPagination() {
     return b;
   };
 
-  pg.appendChild(btn('←', () => { state.page--; doSearch(); }, state.page === 0));
-
-  const start = Math.max(0, state.page - 2);
-  const end = Math.min(total_pages - 1, state.page + 2);
-  for (let i = start; i <= end; i++) {
+  for (let i = 0; i < total_pages; i++) {
     pg.appendChild(btn(i + 1, () => { state.page = i; doSearch(); }, false, i === state.page));
   }
-
-  pg.appendChild(btn('→', () => { state.page++; doSearch(); }, state.page >= total_pages - 1));
 }
 
 // ── Results bar ───────────────────────────────────────────────────────────

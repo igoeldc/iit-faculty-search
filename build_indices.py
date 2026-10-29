@@ -13,9 +13,11 @@ Outputs:
     indices/qdrant/         — Qdrant persistent local collection
 """
 
+import argparse
 import json
 import os
 import pickle
+import shutil
 import sys
 
 # ---------------------------------------------------------------------------
@@ -35,13 +37,20 @@ def load_faculty() -> list[dict]:
 
 
 def make_searchable(record: dict) -> str:
-    """Build a single string for BM25s from key fields."""
+    """Build the shared retrieval text from all useful profile fields."""
     parts = [
         record.get("name", ""),
         " ".join(record.get("titles", [])),
         " ".join(record.get("departments", [])),
         " ".join(record.get("research_interests", [])),
         " ".join(record.get("publications", [])),
+        " ".join(record.get("education", [])),
+        " ".join(record.get("professional_affiliations", [])),
+        " ".join(
+            item
+            for values in record.get("additional_sections", {}).values()
+            for item in values
+        ),
     ]
     return " ".join(p for p in parts if p)
 
@@ -84,6 +93,8 @@ def build_tantivy(faculty: list[dict]) -> None:
 
     print("Building Tantivy index …")
     tantivy_dir = os.path.join(INDICES_DIR, "tantivy")
+    if os.path.exists(tantivy_dir):
+        shutil.rmtree(tantivy_dir)
     os.makedirs(tantivy_dir, exist_ok=True)
 
     try:
@@ -93,6 +104,7 @@ def build_tantivy(faculty: list[dict]) -> None:
         schema_builder.add_text_field("departments", stored=True, tokenizer_name="en_stem")
         schema_builder.add_text_field("research_interests", stored=True, tokenizer_name="en_stem")
         schema_builder.add_text_field("titles", stored=True, tokenizer_name="en_stem")
+        schema_builder.add_text_field("profile", stored=False, tokenizer_name="en_stem")
         schema_builder.add_text_field("email", stored=True)
         schema = schema_builder.build()
 
@@ -106,6 +118,7 @@ def build_tantivy(faculty: list[dict]) -> None:
                 departments=" ".join(f.get("departments", [])),
                 research_interests=" ".join(f.get("research_interests", [])),
                 titles=" ".join(f.get("titles", [])),
+                profile=make_searchable(f),
                 email=f.get("email", ""),
             ))
 
@@ -121,9 +134,9 @@ def build_tantivy(faculty: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 def build_qdrant(faculty: list[dict]) -> None:
-    from sentence_transformers import SentenceTransformer
     from qdrant_client import QdrantClient
-    from qdrant_client.models import Distance, VectorParams, PointStruct
+    from qdrant_client.models import Distance, PointStruct, VectorParams
+    from sentence_transformers import SentenceTransformer
 
     MODEL_NAME = "all-MiniLM-L6-v2"
     COLLECTION = "faculty"
@@ -134,15 +147,7 @@ def build_qdrant(faculty: list[dict]) -> None:
     print("  Loading sentence-transformers model …")
     model = SentenceTransformer(MODEL_NAME)
 
-    def embed_text(f: dict) -> str:
-        parts = [
-            " | ".join(f.get("research_interests", [])),
-            " ".join(f.get("titles", [])),
-            " ".join(f.get("departments", [])),
-        ]
-        return " ".join(p for p in parts if p)
-
-    texts = [embed_text(f) for f in faculty]
+    texts = [make_searchable(f) for f in faculty]
     print(f"  Encoding {len(texts)} documents …")
     vectors = model.encode(texts, show_progress_bar=True, batch_size=64)
 
@@ -176,7 +181,15 @@ def build_qdrant(faculty: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--input', default=FACULTY_JSON)
+    parser.add_argument('--indices-dir', default=INDICES_DIR)
+    args = parser.parse_args()
+    FACULTY_JSON = args.input
+    INDICES_DIR = args.indices_dir
     faculty = load_faculty()
+    if not faculty:
+        sys.exit('No faculty records; refusing to build empty indices.')
     print(f"Loaded {len(faculty)} faculty records from {FACULTY_JSON}\n")
 
     build_bm25s(faculty)

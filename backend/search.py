@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import concurrent.futures
 
-
 # ---------------------------------------------------------------------------
 # Keyword search (BM25s)
 # ---------------------------------------------------------------------------
@@ -31,6 +30,8 @@ def keyword_search(
     for i in range(results.shape[1]):
         doc_idx = int(results[0, i])
         score = float(scores[0, i])
+        if score <= 0:
+            continue
         record = dict(faculty[doc_idx])
         record["score"] = score
         record["search_type"] = "keyword"
@@ -50,8 +51,11 @@ def structured_search(
     tantivy_index,   # tantivy.Index or None
     retriever,
     faculty: list[dict],
+    fallback_to_keyword: bool = True,
 ) -> list[dict]:
     if tantivy_index is None:
+        if not fallback_to_keyword:
+            return []
         results = keyword_search(q, limit, retriever, faculty)
         for r in results:
             r["search_type"] = "structured"
@@ -68,6 +72,7 @@ def structured_search(
             "titles": 1.0,
             "departments": 3.0,
             "name": 5.0,
+            "profile": 0.5,
         }
 
         text = q or ""
@@ -80,7 +85,9 @@ def structured_search(
             try:
                 parser = tantivy.QueryParser.for_index(tantivy_index, [field])
                 sub = parser.parse_query(text)
-                subqueries.append((tantivy.Occur.Should, sub))
+                subqueries.append(
+                    (tantivy.Occur.Should, tantivy.Query.boost_query(sub, boost))
+                )
             except Exception:
                 pass
 
@@ -93,6 +100,8 @@ def structured_search(
                 pass
 
         if not subqueries:
+            if not fallback_to_keyword:
+                return []
             results = keyword_search(q, limit, retriever, faculty)
             for r in results:
                 r["search_type"] = "structured"
@@ -112,8 +121,11 @@ def structured_search(
         return out
 
     except Exception as exc:
-        # Tantivy failed at query time — fall back gracefully
+        # Tantivy failed at query time — use BM25s outside hybrid search.
         import warnings
+        if not fallback_to_keyword:
+            warnings.warn(f"Tantivy query failed ({exc}), omitting structured results")
+            return []
         warnings.warn(f"Tantivy query failed ({exc}), falling back to BM25s")
         results = keyword_search(q, limit, retriever, faculty)
         for r in results:
@@ -131,8 +143,9 @@ def semantic_search(
     limit: int,
     qdrant_client,
     embed_model,
+    min_score: float = 0.25,
 ) -> list[dict]:
-    from qdrant_client.models import Filter, FieldCondition, MatchAny
+    from qdrant_client.models import FieldCondition, Filter, MatchAny
 
     vector = embed_model.encode([q])[0].tolist()
 
@@ -151,6 +164,7 @@ def semantic_search(
         collection_name="faculty",
         query=vector,
         query_filter=qdrant_filter,
+        score_threshold=min_score,
         limit=limit,
         with_payload=True,
     )
@@ -185,7 +199,16 @@ def hybrid_search(
         return keyword_search(q, fetch_n, retriever, faculty)
 
     def _st():
-        return structured_search(q, None, department, fetch_n, tantivy_index, retriever, faculty)
+        return structured_search(
+            q,
+            None,
+            department,
+            fetch_n,
+            tantivy_index,
+            retriever,
+            faculty,
+            fallback_to_keyword=False,
+        )
 
     def _sem():
         return semantic_search(q, department, fetch_n, qdrant_client, embed_model)

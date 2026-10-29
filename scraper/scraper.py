@@ -8,10 +8,11 @@ Two-phase scraper:
 Output: faculty.json  (list of faculty dicts)
 """
 
+import argparse
 import json
 import re
-import time
 import sys
+import time
 from urllib.parse import urljoin
 
 import requests
@@ -31,7 +32,7 @@ HEADERS = {
 # Helpers
 # ---------------------------------------------------------------------------
 
-def get_soup(url: str, params: dict = None, retries: int = 3) -> BeautifulSoup | None:
+def get_soup(url: str, params: dict | None = None, retries: int = 3) -> BeautifulSoup | None:
     """Fetch a URL and return a BeautifulSoup object, with simple retry logic."""
     for attempt in range(retries):
         try:
@@ -54,7 +55,20 @@ def clean(text: str) -> str:
 # Phase 1: Collect profile URLs from the directory listing
 # ---------------------------------------------------------------------------
 
-def scrape_directory(faculty_only: bool = True, max_pages: int = 100) -> list[str]:
+def school_filter(soup: BeautifulSoup, school: str) -> dict:
+    matches = sorted({
+        (select['name'], option['value'])
+        for select in soup.select('select[name="school"]')
+        for option in select.select('option[value]')
+        if clean(option.get_text()).casefold() == school.casefold()
+        and option['value'] not in ('', 'All')
+    })
+    if len(matches) != 1:
+        raise ValueError(f"Expected one distinct directory filter for {school!r}, found {len(matches)}: {matches}. Check the directory's school names.")
+    return dict(matches)
+
+
+def scrape_directory(faculty_only: bool = True, max_pages: int = 100, school: str | None = None) -> list[str]:
     """
     Paginate through /directory/people and collect profile hrefs.
     Returns a deduplicated list of absolute profile URLs.
@@ -65,6 +79,12 @@ def scrape_directory(faculty_only: bool = True, max_pages: int = 100) -> list[st
 
     # Filter params: profile_type=21 = Faculty
     base_params = {"profile_type": 21} if faculty_only else {}
+    if school:
+        soup = get_soup(DIRECTORY_URL)
+        if soup is None:
+            raise RuntimeError('Could not load directory school filters.')
+        base_params.update(school_filter(soup, school))
+        print(f"School filter: {school} ({base_params})")
 
     print("=== Phase 1: Collecting profile URLs ===")
     while page < max_pages:
@@ -72,8 +92,7 @@ def scrape_directory(faculty_only: bool = True, max_pages: int = 100) -> list[st
         print(f"  Fetching directory page {page} …", end=" ", flush=True)
         soup = get_soup(DIRECTORY_URL, params=params)
         if soup is None:
-            print("FAILED – stopping pagination.")
-            break
+            raise RuntimeError(f"Directory page {page} failed; refusing to save a partial scrape.")
 
         # Profile cards: <article> or <div> with a link to /directory/people/<slug>
         links = soup.select("a[href*='/directory/people/']")
@@ -98,6 +117,8 @@ def scrape_directory(faculty_only: bool = True, max_pages: int = 100) -> list[st
             break
         page += 1
         time.sleep(0.5)   # be polite
+    else:
+        raise RuntimeError('Directory pagination limit reached; refusing to save a partial scrape.')
 
     return profile_urls
 
@@ -199,6 +220,7 @@ def scrape_profile(url: str) -> dict | None:
         "books_html": [],
         "patents": [],
         "patents_html": [],
+        "additional_sections": {},
     }
 
     SECTION_KEYS = {
@@ -212,14 +234,21 @@ def scrape_profile(url: str) -> dict | None:
         "patents": "patents",
     }
 
-    for heading in soup.find_all(["h2", "h3", "h4"]):
+    ignored_headings = {"tags:", "contact information", "learn more..."}
+    for heading in soup.select("article.detail-page h2, article.detail-page h3, article.detail-page h4"):
         heading_text = clean(heading.get_text()).lower()
+        matched = False
         for keyword, key in SECTION_KEYS.items():
             if keyword in heading_text:
                 plain, html = parse_list_section(heading)
                 section_map[key].extend(plain)
                 section_map[f"{key}_html"].extend(html)
+                matched = True
                 break
+        if not matched and heading_text not in ignored_headings:
+            plain, _ = parse_list_section(heading)
+            if plain:
+                section_map["additional_sections"][clean(heading.get_text())] = plain
 
     data.update(section_map)
 
@@ -239,10 +268,14 @@ def scrape_profile(url: str) -> dict | None:
 # ---------------------------------------------------------------------------
 
 def main():
-    output_path = "faculty.json"
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--school', help='Exact school name in the directory filter')
+    parser.add_argument('--output', default='faculty.json')
+    args = parser.parse_args()
+    output_path = args.output
 
     # ---- Phase 1 ----
-    profile_urls = scrape_directory(faculty_only=True)
+    profile_urls = scrape_directory(faculty_only=True, school=args.school)
     if not profile_urls:
         print("No profile URLs found – check if the directory structure changed.")
         sys.exit(1)
@@ -257,6 +290,8 @@ def main():
         profile = scrape_profile(url)
         if profile:
             faculty.append(profile)
+        else:
+            raise RuntimeError(f'Profile failed: {url}; existing output left untouched.')
         time.sleep(0.4)   # polite delay
 
     # ---- Save ----

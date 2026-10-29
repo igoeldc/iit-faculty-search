@@ -17,7 +17,6 @@ import os
 import pickle
 import sys
 from contextlib import asynccontextmanager
-from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,15 +27,13 @@ from fastapi.middleware.cors import CORSMiddleware
 
 _BACKEND_DIR = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.dirname(_BACKEND_DIR)
-_INDICES_DIR = os.path.join(_REPO_ROOT, "indices")
-_FACULTY_JSON = os.path.join(_REPO_ROOT, "faculty.json")
-
+_INDICES_DIR = os.environ.get("INDICES_DIR", os.path.join(_REPO_ROOT, "indices"))
 # Add repo root to sys.path so `from backend.search import ...` works when
 # running from the backend/ directory.
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from backend.search import (  # noqa: E402
+from backend.search import (
     hybrid_search,
     keyword_search,
     semantic_search,
@@ -86,6 +83,7 @@ async def lifespan(app: FastAPI):
             schema_builder.add_text_field("departments", stored=True, tokenizer_name="en_stem")
             schema_builder.add_text_field("research_interests", stored=True, tokenizer_name="en_stem")
             schema_builder.add_text_field("titles", stored=True, tokenizer_name="en_stem")
+            schema_builder.add_text_field("profile", stored=False, tokenizer_name="en_stem")
             schema_builder.add_text_field("email", stored=True)
             schema = schema_builder.build()
             _tantivy_index = tantivy.Index(schema, path=tantivy_dir)
@@ -153,6 +151,45 @@ def _all_departments() -> list[str]:
     return sorted(dept_set)
 
 
+def _matches_faculty_type(record: dict, faculty_type: str | None) -> bool:
+    if not faculty_type:
+        return True
+    titles = " ".join(record.get("titles", [])).casefold()
+    if faculty_type == "Full Professor":
+        return "professor" in titles and not any(
+            modifier in titles
+            for modifier in (
+                "assistant professor",
+                "associate professor",
+                "teaching professor",
+                "research professor",
+                "adjunct",
+            )
+        )
+    return faculty_type.casefold() in titles
+
+
+def _filter_results(
+    records: list[dict], dept: str | None, faculty_type: str | None
+) -> list[dict]:
+    return [
+        record
+        for record in records
+        if (not dept or dept in record.get("departments", []))
+        and _matches_faculty_type(record, faculty_type)
+    ]
+
+
+def _search_response(
+    results: list[dict], mode: str, offset: int, limit: int
+) -> dict:
+    return {
+        "results": results[offset : offset + limit],
+        "total": len(results),
+        "mode": mode,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -172,61 +209,80 @@ def get_faculty(slug: str):
 
 
 @app.get("/search/keyword")
-def search_keyword(q: str, limit: int = Query(10, ge=1, le=50)):
-    results = keyword_search(q, limit, _bm25_retriever, _faculty)
-    return {"results": results, "total": len(results), "mode": "keyword"}
+def search_keyword(
+    q: str,
+    dept: str | None = None,
+    faculty_type: str | None = None,
+    offset: int = Query(0, ge=0),
+    limit: int = Query(10, ge=1, le=50),
+):
+    results = _filter_results(
+        keyword_search(q, len(_faculty), _bm25_retriever, _faculty), dept, faculty_type
+    )
+    return _search_response(results, "keyword", offset, limit)
 
 
 @app.get("/search/semantic")
 def search_semantic(
     q: str,
-    dept: Optional[str] = None,
+    dept: str | None = None,
+    faculty_type: str | None = None,
+    offset: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=50),
 ):
-    results = semantic_search(q, dept, limit, _qdrant_client, _embed_model)
-    return {"results": results, "total": len(results), "mode": "semantic"}
+    results = _filter_results(
+        semantic_search(q, None, len(_faculty), _qdrant_client, _embed_model),
+        dept,
+        faculty_type,
+    )
+    return _search_response(results, "semantic", offset, limit)
 
 
 @app.get("/search/structured")
 def search_structured(
     q: str = "",
-    name: Optional[str] = None,
-    dept: Optional[str] = None,
+    name: str | None = None,
+    dept: str | None = None,
+    faculty_type: str | None = None,
+    offset: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=50),
 ):
-    results = structured_search(
-        q, name, dept, limit, _tantivy_index, _bm25_retriever, _faculty
+    results = _filter_results(
+        structured_search(
+            q, name, None, len(_faculty), _tantivy_index, _bm25_retriever, _faculty
+        ),
+        dept,
+        faculty_type,
     )
-    return {"results": results, "total": len(results), "mode": "structured"}
+    return _search_response(results, "structured", offset, limit)
 
 
 @app.get("/search")
 def search(
     q: str = "",
-    dept: Optional[str] = None,
+    dept: str | None = None,
+    faculty_type: str | None = None,
     mode: str = Query("hybrid", pattern="^(hybrid|keyword|semantic|structured)$"),
+    offset: int = Query(0, ge=0),
     limit: int = Query(10, ge=1, le=50),
 ):
-    if not q and not dept:
-        # Return first `limit` faculty with no query
-        results = _faculty[:limit]
-        for r in results:
-            r = dict(r)
-        return {"results": results, "total": len(_faculty), "mode": mode}
+    if not q:
+        results = _filter_results(_faculty, dept, faculty_type)
+        return _search_response(results, mode, offset, limit)
 
     if mode == "keyword":
-        results = keyword_search(q or dept or "", limit, _bm25_retriever, _faculty)
+        results = keyword_search(q, len(_faculty), _bm25_retriever, _faculty)
     elif mode == "semantic":
-        results = semantic_search(q, dept, limit, _qdrant_client, _embed_model)
+        results = semantic_search(q, None, len(_faculty), _qdrant_client, _embed_model)
     elif mode == "structured":
         results = structured_search(
-            q, None, dept, limit, _tantivy_index, _bm25_retriever, _faculty
+            q, None, None, len(_faculty), _tantivy_index, _bm25_retriever, _faculty
         )
     else:  # hybrid
         results = hybrid_search(
             q,
-            dept,
-            limit,
+            None,
+            len(_faculty),
             _bm25_retriever,
             _faculty,
             _tantivy_index,
@@ -234,4 +290,5 @@ def search(
             _embed_model,
         )
 
-    return {"results": results, "total": len(results), "mode": mode}
+    results = _filter_results(results, dept, faculty_type)
+    return _search_response(results, mode, offset, limit)
